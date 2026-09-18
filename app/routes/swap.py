@@ -5,13 +5,20 @@ swap_bp = Blueprint('swap', __name__)
 
 HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 
-TOKEN_IDS = {
-    "SOL": "SOL",
-    "ETH": "ETH",
-    "USDC": "USDC",
-    "USDT": "USDT",
-    "BTC": "BTC"
+TOKEN_ADDRESSES = {
+    "ETH": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+    "SOL": "So11111111111111111111111111111111111111112",
+    "BTC": "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599",  # WBTC on Ethereum
+    "USDC": None,
+    "USDT": None
 }
+
+def find_usd_pair(pairs):
+    for pair in pairs:
+        quote = pair.get("quoteToken", {}).get("symbol", "").upper()
+        if quote in ["USDT", "USDC", "USD"]:
+            return pair
+    return pairs[0]
 
 def get_crypto_prices(symbols):
     prices = {}
@@ -20,12 +27,16 @@ def get_crypto_prices(symbols):
             prices[symbol] = {"price": 1.0, "change_24h": 0.0}
             continue
         try:
-            url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}USDT"
-            response = requests.get(url, headers=HEADERS, timeout=10)
-            data = response.json()
+            address = TOKEN_ADDRESSES.get(symbol)
+            if not address:
+                prices[symbol] = {"price": 0, "change_24h": 0}
+                continue
+            url = f"https://api.dexscreener.com/latest/dex/tokens/{address}"
+            res = requests.get(url, headers=HEADERS, timeout=10).json()
+            pair = find_usd_pair(res["pairs"])
             prices[symbol] = {
-                "price": float(data["lastPrice"]),
-                "change_24h": round(float(data["priceChangePercent"]), 2)
+                "price": float(pair["priceUsd"]),
+                "change_24h": round(float(pair.get("priceChange", {}).get("h24", 0)), 2)
             }
         except:
             prices[symbol] = {"price": 0, "change_24h": 0}
@@ -38,9 +49,9 @@ def get_quote():
     amount = float(request.args.get('amount', 1))
 
     try:
-        if from_token not in TOKEN_IDS or to_token not in TOKEN_IDS:
+        if from_token not in TOKEN_ADDRESSES or to_token not in TOKEN_ADDRESSES:
             return jsonify({
-                "error": f"Token not supported. Available: {list(TOKEN_IDS.keys())}"
+                "error": f"Token not supported. Available: {list(TOKEN_ADDRESSES.keys())}"
             }), 400
 
         data = get_crypto_prices([from_token, to_token])
@@ -90,7 +101,7 @@ def execute_swap():
 @swap_bp.route('/tokens', methods=['GET'])
 def get_supported_tokens():
     try:
-        symbols = list(TOKEN_IDS.keys())
+        symbols = list(TOKEN_ADDRESSES.keys())
         data = get_crypto_prices(symbols)
 
         tokens = []
