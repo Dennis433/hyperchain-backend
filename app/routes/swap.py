@@ -3,13 +3,21 @@ import requests
 
 swap_bp = Blueprint('swap', __name__)
 
+HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+
 TOKEN_IDS = {
-    "SOL": "solana",
-    "ETH": "ethereum",
-    "USDC": "usd-coin",
-    "USDT": "tether",
-    "BTC": "bitcoin"
+    "SOL": "SOL",
+    "ETH": "ETH",
+    "USDC": "USDC",
+    "USDT": "USDT",
+    "BTC": "BTC"
 }
+
+def get_crypto_prices(symbols):
+    fsyms = ",".join(symbols)
+    url = f"https://min-api.cryptocompare.com/data/pricemultifull?fsyms={fsyms}&tsyms=USD"
+    response = requests.get(url, headers=HEADERS, timeout=10)
+    return response.json().get("RAW", {})
 
 @swap_bp.route('/quote', methods=['GET'])
 def get_quote():
@@ -18,20 +26,15 @@ def get_quote():
     amount = float(request.args.get('amount', 1))
 
     try:
-        from_id = TOKEN_IDS.get(from_token)
-        to_id = TOKEN_IDS.get(to_token)
-
-        if not from_id or not to_id:
+        if from_token not in TOKEN_IDS or to_token not in TOKEN_IDS:
             return jsonify({
                 "error": f"Token not supported. Available: {list(TOKEN_IDS.keys())}"
             }), 400
 
-        url = f"https://api.coingecko.com/api/v3/simple/price?ids={from_id},{to_id}&vs_currencies=usd"
-        response = requests.get(url)
-        data = response.json()
+        data = get_crypto_prices([from_token, to_token])
 
-        from_price = data[from_id]["usd"]
-        to_price = data[to_id]["usd"]
+        from_price = data[from_token]["USD"]["PRICE"]
+        to_price = data[to_token]["USD"]["PRICE"]
 
         rate = from_price / to_price
         amount_out = round(amount * rate, 6)
@@ -75,19 +78,16 @@ def execute_swap():
 @swap_bp.route('/tokens', methods=['GET'])
 def get_supported_tokens():
     try:
-        ids = ",".join(TOKEN_IDS.values())
-        url = f"https://api.coingecko.com/api/v3/simple/price?ids={ids}&vs_currencies=usd&include_24hr_change=true"
-        response = requests.get(url)
-        data = response.json()
+        symbols = list(TOKEN_IDS.keys())
+        data = get_crypto_prices(symbols)
 
         tokens = []
-        for symbol, cg_id in TOKEN_IDS.items():
-            token_data = data.get(cg_id, {})
+        for symbol in symbols:
+            token_data = data.get(symbol, {}).get("USD", {})
             tokens.append({
                 "symbol": symbol,
-                "name": cg_id.replace("-", " ").title(),
-                "price_usd": token_data.get("usd", 0),
-                "change_24h": round(token_data.get("usd_24h_change", 0), 2)
+                "price_usd": token_data.get("PRICE", 0),
+                "change_24h": round(token_data.get("CHANGEPCT24HOUR", 0), 2)
             })
 
         return jsonify({
