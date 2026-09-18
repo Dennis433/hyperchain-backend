@@ -1,29 +1,21 @@
 import requests
 
-COINGECKO_URL = "https://api.coingecko.com/api/v3"
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0",
-    "Accept": "application/json"
-}
+HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 
 def get_prices():
     try:
-        url = f"{COINGECKO_URL}/simple/price?ids=ethereum,solana&vs_currencies=usd&include_24hr_change=true"
+        url = "https://min-api.cryptocompare.com/data/pricemultifull?fsyms=ETH,SOL&tsyms=USD"
         response = requests.get(url, headers=HEADERS, timeout=10)
-        data = response.json()
-
-        if "ethereum" not in data or "solana" not in data:
-            return {"error": "CoinGecko rate limited", "raw": data}
+        data = response.json()["RAW"]
 
         return {
             "ETH": {
-                "price": data["ethereum"]["usd"],
-                "change_24h": round(data["ethereum"]["usd_24h_change"], 2)
+                "price": data["ETH"]["USD"]["PRICE"],
+                "change_24h": round(data["ETH"]["USD"]["CHANGEPCT24HOUR"], 2)
             },
             "SOL": {
-                "price": data["solana"]["usd"],
-                "change_24h": round(data["solana"]["usd_24h_change"], 2)
+                "price": data["SOL"]["USD"]["PRICE"],
+                "change_24h": round(data["SOL"]["USD"]["CHANGEPCT24HOUR"], 2)
             }
         }
     except Exception as e:
