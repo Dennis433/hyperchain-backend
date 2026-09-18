@@ -2,11 +2,20 @@ import requests
 
 COINGECKO_URL = "https://api.coingecko.com/api/v3"
 
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "application/json"
+}
+
 def get_prices():
     try:
         url = f"{COINGECKO_URL}/simple/price?ids=ethereum,solana&vs_currencies=usd&include_24hr_change=true"
-        response = requests.get(url)
+        response = requests.get(url, headers=HEADERS, timeout=10)
         data = response.json()
+
+        if "ethereum" not in data or "solana" not in data:
+            return {"error": "CoinGecko rate limited", "raw": data}
+
         return {
             "ETH": {
                 "price": data["ethereum"]["usd"],
@@ -18,4 +27,4 @@ def get_prices():
             }
         }
     except Exception as e:
-        return f"Error: {str(e)}"
+        return {"error": str(e)}
