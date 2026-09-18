@@ -11,34 +11,45 @@ MEME_QUERIES = {
     'all':      ['solana meme', 'ethereum meme', 'pump fun', 'pepe', 'bonk', 'wif'],
 }
 
-ETH_PAIR  = '0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640'  # USDC/ETH Uniswap v3
-SOL_PAIR  = '83v8iPyZihDEjDdY8RdZddyZNyUtXngz69Lgo9Kt5d6Q'  # SOL/USDC Raydium
-
 # ─── Helpers ───────────────────────────────────────────────────────────────
 
-def get_eth_price() -> float:
-    res = requests.get(
-        f'https://api.dexscreener.com/latest/dex/pairs/ethereum/{ETH_PAIR}',
-        timeout=8
-    )
-    return float(res.json()['pair']['priceUsd'])
+def get_token_price(symbol: str, chain: str) -> float:
+    """
+    Get price by searching DexScreener for the token symbol
+    and picking the highest-liquidity pair on the correct chain.
+    """
+    try:
+        res = requests.get(
+            f'https://api.dexscreener.com/latest/dex/search?q={symbol}%2FUSDC',
+            timeout=8
+        )
+        res.raise_for_status()
+        pairs = res.json().get('pairs', []) or []
 
+        # Filter to correct chain, sort by liquidity
+        chain_pairs = [
+            p for p in pairs
+            if p.get('chainId') == chain
+            and p.get('baseToken', {}).get('symbol', '').upper() == symbol.upper()
+        ]
+        chain_pairs.sort(key=lambda p: float(p.get('liquidity', {}).get('usd') or 0), reverse=True)
 
-def get_sol_price() -> float:
-    res = requests.get(
-        f'https://api.dexscreener.com/latest/dex/pairs/solana/{SOL_PAIR}',
-        timeout=8
-    )
-    return float(res.json()['pair']['priceUsd'])
+        if chain_pairs:
+            return float(chain_pairs[0].get('priceUsd') or 0)
+        return 0.0
+    except Exception:
+        return 0.0
 
 
 def fetch_dexscreener_pairs(query: str) -> list:
     """Search DexScreener for pairs matching a query."""
     try:
-        url = f'https://api.dexscreener.com/latest/dex/search?q={query}'
-        res = requests.get(url, timeout=8)
-        data = res.json()
-        return data.get('pairs', []) or []
+        res = requests.get(
+            f'https://api.dexscreener.com/latest/dex/search?q={query}',
+            timeout=8
+        )
+        res.raise_for_status()
+        return res.json().get('pairs', []) or []
     except Exception:
         return []
 
@@ -46,9 +57,13 @@ def fetch_dexscreener_pairs(query: str) -> list:
 def fetch_trending_pairs(chain: str) -> list:
     """Fetch trending/boosted tokens from DexScreener."""
     try:
-        url = 'https://api.dexscreener.com/token-boosts/top/v1'
-        res = requests.get(url, timeout=8)
-        items = res.json() if res.ok else []
+        res = requests.get(
+            'https://api.dexscreener.com/token-boosts/top/v1',
+            timeout=8
+        )
+        if not res.ok:
+            return []
+        items = res.json() or []
 
         pairs = []
         for item in items[:30]:
@@ -114,8 +129,14 @@ def normalize_pair(pair: dict):
 @wallet_bp.route('/prices', methods=['GET'])
 def get_prices():
     try:
-        eth_price = get_eth_price()
-        sol_price = get_sol_price()
+        eth_price = get_token_price('WETH', 'ethereum')
+        sol_price = get_token_price('SOL', 'solana')
+
+        # Fallback: try alternate symbols if 0
+        if eth_price == 0:
+            eth_price = get_token_price('ETH', 'ethereum')
+        if sol_price == 0:
+            sol_price = get_token_price('WSOL', 'solana')
 
         return jsonify({
             'ETH': {'usd': eth_price},
@@ -164,8 +185,8 @@ def get_markets():
 @wallet_bp.route('/portfolio/<eth_address>/<sol_address>', methods=['GET'])
 def get_portfolio(eth_address, sol_address):
     try:
-        eth_price = get_eth_price()
-        sol_price = get_sol_price()
+        eth_price = get_token_price('WETH', 'ethereum')
+        sol_price = get_token_price('SOL', 'solana')
 
         return jsonify({
             'total_usd': 0,
