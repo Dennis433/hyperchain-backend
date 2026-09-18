@@ -15,30 +15,70 @@ MEME_QUERIES = {
 
 def get_token_price(symbol: str, chain: str) -> float:
     """
-    Get price by searching DexScreener for the token symbol
-    and picking the highest-liquidity pair on the correct chain.
+    Get price by searching DexScreener and picking the best pair.
+    Checks both base and quote token for the symbol match.
     """
     try:
         res = requests.get(
-            f'https://api.dexscreener.com/latest/dex/search?q={symbol}%2FUSDC',
+            f'https://api.dexscreener.com/latest/dex/search?q={symbol}',
             timeout=8
         )
         res.raise_for_status()
         pairs = res.json().get('pairs', []) or []
 
-        # Filter to correct chain, sort by liquidity
+        # Filter to correct chain only
         chain_pairs = [
             p for p in pairs
             if p.get('chainId') == chain
-            and p.get('baseToken', {}).get('symbol', '').upper() == symbol.upper()
         ]
-        chain_pairs.sort(key=lambda p: float(p.get('liquidity', {}).get('usd') or 0), reverse=True)
 
-        if chain_pairs:
-            return float(chain_pairs[0].get('priceUsd') or 0)
+        # Sort by liquidity descending
+        chain_pairs.sort(
+            key=lambda p: float(p.get('liquidity', {}).get('usd') or 0),
+            reverse=True
+        )
+
+        # Find a pair where base OR quote matches our symbol
+        for p in chain_pairs[:20]:
+            base_sym  = p.get('baseToken', {}).get('symbol', '').upper()
+            quote_sym = p.get('quoteToken', {}).get('symbol', '').upper()
+            price_usd = float(p.get('priceUsd') or 0)
+
+            if price_usd == 0:
+                continue
+
+            # If our token is the BASE → priceUsd is already correct
+            if base_sym == symbol.upper():
+                return price_usd
+
+            # If our token is the QUOTE → invert the price
+            if quote_sym == symbol.upper():
+                price_native = float(p.get('priceNative') or 0)
+                if price_native > 0:
+                    return price_usd / price_native
+
         return 0.0
-    except Exception:
+    except Exception as e:
+        print(f'[get_token_price] {symbol} error: {e}')
         return 0.0
+
+
+def get_prices_coingecko() -> dict:
+    """Fallback: fetch ETH and SOL prices from CoinGecko (no key needed)."""
+    try:
+        res = requests.get(
+            'https://api.coingecko.com/api/v3/simple/price?ids=ethereum,solana&vs_currencies=usd',
+            timeout=8
+        )
+        if res.ok:
+            data = res.json()
+            return {
+                'eth': data.get('ethereum', {}).get('usd', 0),
+                'sol': data.get('solana', {}).get('usd', 0),
+            }
+    except Exception as e:
+        print(f'[coingecko] error: {e}')
+    return {'eth': 0, 'sol': 0}
 
 
 def fetch_dexscreener_pairs(query: str) -> list:
@@ -129,14 +169,22 @@ def normalize_pair(pair: dict):
 @wallet_bp.route('/prices', methods=['GET'])
 def get_prices():
     try:
+        # Try DexScreener first
         eth_price = get_token_price('WETH', 'ethereum')
-        sol_price = get_token_price('SOL', 'solana')
-
-        # Fallback: try alternate symbols if 0
         if eth_price == 0:
             eth_price = get_token_price('ETH', 'ethereum')
+
+        sol_price = get_token_price('WSOL', 'solana')
         if sol_price == 0:
-            sol_price = get_token_price('WSOL', 'solana')
+            sol_price = get_token_price('SOL', 'solana')
+
+        # Fallback to CoinGecko if either is still 0
+        if eth_price == 0 or sol_price == 0:
+            cg = get_prices_coingecko()
+            if eth_price == 0:
+                eth_price = cg['eth']
+            if sol_price == 0:
+                sol_price = cg['sol']
 
         return jsonify({
             'ETH': {'usd': eth_price},
@@ -186,7 +234,19 @@ def get_markets():
 def get_portfolio(eth_address, sol_address):
     try:
         eth_price = get_token_price('WETH', 'ethereum')
-        sol_price = get_token_price('SOL', 'solana')
+        if eth_price == 0:
+            eth_price = get_token_price('ETH', 'ethereum')
+
+        sol_price = get_token_price('WSOL', 'solana')
+        if sol_price == 0:
+            sol_price = get_token_price('SOL', 'solana')
+
+        if eth_price == 0 or sol_price == 0:
+            cg = get_prices_coingecko()
+            if eth_price == 0:
+                eth_price = cg['eth']
+            if sol_price == 0:
+                sol_price = cg['sol']
 
         return jsonify({
             'total_usd': 0,
