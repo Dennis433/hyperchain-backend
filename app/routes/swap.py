@@ -14,10 +14,22 @@ TOKEN_IDS = {
 }
 
 def get_crypto_prices(symbols):
-    fsyms = ",".join(symbols)
-    url = f"https://min-api.cryptocompare.com/data/pricemultifull?fsyms={fsyms}&tsyms=USD"
-    response = requests.get(url, headers=HEADERS, timeout=10)
-    return response.json().get("RAW", {})
+    prices = {}
+    for symbol in symbols:
+        if symbol in ["USDC", "USDT"]:
+            prices[symbol] = {"price": 1.0, "change_24h": 0.0}
+            continue
+        try:
+            url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}USDT"
+            response = requests.get(url, headers=HEADERS, timeout=10)
+            data = response.json()
+            prices[symbol] = {
+                "price": float(data["lastPrice"]),
+                "change_24h": round(float(data["priceChangePercent"]), 2)
+            }
+        except:
+            prices[symbol] = {"price": 0, "change_24h": 0}
+    return prices
 
 @swap_bp.route('/quote', methods=['GET'])
 def get_quote():
@@ -33,8 +45,8 @@ def get_quote():
 
         data = get_crypto_prices([from_token, to_token])
 
-        from_price = data[from_token]["USD"]["PRICE"]
-        to_price = data[to_token]["USD"]["PRICE"]
+        from_price = data[from_token]["price"]
+        to_price = data[to_token]["price"]
 
         rate = from_price / to_price
         amount_out = round(amount * rate, 6)
@@ -83,11 +95,11 @@ def get_supported_tokens():
 
         tokens = []
         for symbol in symbols:
-            token_data = data.get(symbol, {}).get("USD", {})
+            token_data = data.get(symbol, {})
             tokens.append({
                 "symbol": symbol,
-                "price_usd": token_data.get("PRICE", 0),
-                "change_24h": round(token_data.get("CHANGEPCT24HOUR", 0), 2)
+                "price_usd": token_data.get("price", 0),
+                "change_24h": token_data.get("change_24h", 0)
             })
 
         return jsonify({
