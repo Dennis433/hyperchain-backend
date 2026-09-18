@@ -11,58 +11,73 @@ MEME_QUERIES = {
     'all':      ['solana meme', 'ethereum meme', 'pump fun', 'pepe', 'bonk', 'wif'],
 }
 
+# DexScreener token addresses
+TOKEN_ADDRESSES = {
+    'ETH': ('ethereum', '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2'),  # WETH
+    'SOL': ('solana',   'So11111111111111111111111111111111111111112'),   # WSOL
+}
+
 # ─── Price Helpers ─────────────────────────────────────────────────────────
 
-def get_prices_binance() -> dict:
-    """Primary: Binance public ticker — no key, always reliable."""
-    try:
-        eth_res = requests.get(
-            'https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT',
-            timeout=8
-        )
-        sol_res = requests.get(
-            'https://api.binance.com/api/v3/ticker/price?symbol=SOLUSDT',
-            timeout=8
-        )
-        eth_price = float(eth_res.json().get('price', 0))
-        sol_price = float(sol_res.json().get('price', 0))
-        print(f'[binance] ETH={eth_price} SOL={sol_price}')
-        return {'eth': eth_price, 'sol': sol_price}
-    except Exception as e:
-        print(f'[binance] FAILED: {e}')
-        return {'eth': 0, 'sol': 0}
-
-
-def get_prices_coingecko() -> dict:
-    """Fallback: CoinGecko simple price."""
+def get_price_by_address(chain: str, address: str) -> float:
+    """
+    Fetch token price from DexScreener using contract address.
+    Picks the pair with highest liquidity.
+    """
     try:
         res = requests.get(
-            'https://api.coingecko.com/api/v3/simple/price'
-            '?ids=ethereum,solana&vs_currencies=usd',
-            headers={'accept': 'application/json'},
-            timeout=10
+            f'https://api.dexscreener.com/latest/dex/tokens/{address}',
+            timeout=8
         )
-        print(f'[coingecko] status={res.status_code}')
-        data = res.json()
-        return {
-            'eth': float(data.get('ethereum', {}).get('usd', 0)),
-            'sol': float(data.get('solana',   {}).get('usd', 0)),
-        }
+        res.raise_for_status()
+        pairs = res.json().get('pairs', []) or []
+
+        # Filter to correct chain
+        chain_pairs = [p for p in pairs if p.get('chainId') == chain]
+
+        if not chain_pairs:
+            print(f'[dexscreener] no pairs found for {address} on {chain}')
+            return 0.0
+
+        # Sort by liquidity descending, pick best pair
+        chain_pairs.sort(
+            key=lambda p: float(p.get('liquidity', {}).get('usd') or 0),
+            reverse=True
+        )
+
+        best = chain_pairs[0]
+        base_addr  = best.get('baseToken',  {}).get('address', '').lower()
+        price_usd  = float(best.get('priceUsd') or 0)
+        price_native = float(best.get('priceNative') or 0)
+
+        # If our token is the BASE token → priceUsd is correct
+        if base_addr == address.lower():
+            print(f'[dexscreener] {address} base price = {price_usd}')
+            return price_usd
+
+        # If our token is the QUOTE token → invert
+        if price_native > 0:
+            inverted = price_usd / price_native
+            print(f'[dexscreener] {address} quote price (inverted) = {inverted}')
+            return inverted
+
+        return 0.0
+
     except Exception as e:
-        print(f'[coingecko] FAILED: {e}')
-        return {'eth': 0, 'sol': 0}
+        print(f'[dexscreener] FAILED for {address}: {e}')
+        return 0.0
 
 
 def get_live_prices() -> dict:
-    """Try Binance first, fall back to CoinGecko."""
-    prices = get_prices_binance()
-    if prices['eth'] == 0 or prices['sol'] == 0:
-        fallback = get_prices_coingecko()
-        if prices['eth'] == 0:
-            prices['eth'] = fallback['eth']
-        if prices['sol'] == 0:
-            prices['sol'] = fallback['sol']
-    return prices
+    """Fetch ETH and SOL prices via DexScreener token addresses."""
+    eth_chain, eth_addr = TOKEN_ADDRESSES['ETH']
+    sol_chain, sol_addr = TOKEN_ADDRESSES['SOL']
+
+    eth_price = get_price_by_address(eth_chain, eth_addr)
+    sol_price = get_price_by_address(sol_chain, sol_addr)
+
+    print(f'[prices] ETH={eth_price} SOL={sol_price}')
+    return {'eth': eth_price, 'sol': sol_price}
 
 
 # ─── Markets Helpers ───────────────────────────────────────────────────────
@@ -168,6 +183,7 @@ def get_markets():
     all_pairs      = []
     seen_addresses = set()
 
+    # Strategy 1: meme coin keyword search
     queries = MEME_QUERIES.get(chain, MEME_QUERIES['all'])
     for q in queries:
         pairs = fetch_dexscreener_pairs(q)
@@ -181,6 +197,7 @@ def get_markets():
                     seen_addresses.add(addr)
                     all_pairs.append(token)
 
+    # Strategy 2: trending/boosted tokens
     for p in fetch_trending_pairs(chain):
         addr = p.get('baseToken', {}).get('address', '')
         if addr and addr not in seen_addresses:
